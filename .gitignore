@@ -1,3 +1,11 @@
-jai
+# marker files for caching docker information
 .image*
+
+# Just in case we run `go build build.go` by accident
 /build
+
+# Don't wanna publicise the compiler before release!
+jai
+
+# The compiler outputs some stuff to this folder
+/.build

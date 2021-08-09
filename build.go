@@ -6,15 +6,11 @@ package main
 // Docker documentation.
 
 import (
-	"bufio"
-	_ "bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	_ "flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -25,7 +21,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
@@ -59,9 +54,11 @@ func main() {
 
 func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 	begin := time.Now()
-	tarOptions := archive.TarOptions{IncludeFiles: []string{}}
-	buildImage(cli, ctx, "ubuntu.Dockerfile", ubuntuImage, &tarOptions, false)
-	buildImage(cli, ctx, "Dockerfile", compilerImage, &tarOptions, false)
+	buildImage(cli, ctx, "ubuntu.Dockerfile", ubuntuImage, false)
+	buildImage(cli, ctx, "Dockerfile", compilerImage, false)
+
+	cwd, err := os.Getwd()
+	checkErr(err)
 
 	// Build container
 	cmdBinary := []string{"/root/jai-docker/jai/bin/jai-linux"}
@@ -73,6 +70,11 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 	}
 	hostConfig := container.HostConfig{
 		Mounts: []mount.Mount{
+			{
+				Type:   mount.TypeBind,
+				Source: cwd,
+				Target: "/cwd",
+			},
 			{
 				Type:   mount.TypeBind,
 				Source: projectDir,
@@ -87,9 +89,8 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 	}
 
 	if err != nil {
-		tarOptions := archive.TarOptions{IncludeFiles: []string{}}
-		buildImage(cli, ctx, "ubuntu.Dockerfile", ubuntuImage, &tarOptions, true)
-		buildImage(cli, ctx, "Dockerfile", compilerImage, &tarOptions, true)
+		buildImage(cli, ctx, "ubuntu.Dockerfile", ubuntuImage, true)
+		buildImage(cli, ctx, "Dockerfile", compilerImage, true)
 
 		resp, err = cli.ContainerCreate(ctx, &containerConfig, &hostConfig, nil, nil, "")
 		if resp.Warnings != nil && len(resp.Warnings) != 0 {
@@ -102,7 +103,7 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 	checkErr(err)
 
 	compileBegin := time.Now()
-	fmt.Printf("docker stuff took %v seconds\n", compileBegin.Sub(begin).Seconds())
+	fmt.Printf("docker stuff took %v seconds\n\n", compileBegin.Sub(begin).Seconds())
 
 	statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 	var commandStatus int64
@@ -152,78 +153,35 @@ func needBuild(dockerfilePath, imageName string) bool {
 	}
 }
 
-func buildImage(cli *client.Client, ctx context.Context, dockerfilePath, imageName string, tarOptions *archive.TarOptions, forceBuild bool) {
+func buildImage(cli *client.Client, ctx context.Context, dockerfilePath, imageName string, forceBuild bool) {
 	if !needBuild(dockerfilePath, imageName) && !forceBuild {
 		return
 	}
 
-	tar, err := archive.TarWithOptions(projectDir, tarOptions)
+	cmd := exec.Command("docker", "build", "--platform=linux/amd64", "-f", dockerfilePath, "--tag", imageName, ".")
+
+	stdout, err := cmd.StdoutPipe()
+	checkErr(err)
+	stderr, err := cmd.StderrPipe()
 	checkErr(err)
 
-	// Build image
-	opts := types.ImageBuildOptions{
-		Dockerfile: dockerfilePath,
-		Tags:       []string{imageName},
-		Remove:     true,
+	finished := make(chan bool)
+	ioCopy := func(w io.Writer, r io.Reader) {
+		io.Copy(w, r)
+		finished <- true
 	}
-	res, err := cli.ImageBuild(ctx, tar, opts)
+
+	go ioCopy(os.Stdout, stdout)
+	go ioCopy(os.Stderr, stderr)
+	err = cmd.Run()
+	<-finished
+	<-finished
+
 	checkErr(err)
-	err = printImageLogs(res.Body)
-	checkErr(err)
-	res.Body.Close()
 }
 
 func checkErr(err error) {
 	if err != nil {
 		panic(err.Error())
 	}
-}
-
-func printImageLogs(rd io.Reader) error {
-	type ErrorDetail struct {
-		Message string `json:"message"`
-		Code    int    `json:"code"`
-	}
-
-	type ErrorLine struct {
-		Error       string      `json:"error"`
-		ErrorDetail ErrorDetail `json:"errorDetail"`
-	}
-
-	type Aux struct {
-		Id string `json:"ID"`
-	}
-
-	type StreamLine struct {
-		Error       string      `json:"error"`
-		ErrorDetail ErrorDetail `json:"errorDetail"`
-		Value       string      `json:"stream"`
-		Status      string      `json:"status"`
-		Id          string      `json:"id"`
-		Aux         Aux         `json:"aux"`
-	}
-
-	scanner := bufio.NewScanner(rd)
-	for scanner.Scan() {
-		buf := scanner.Bytes()
-
-		var line StreamLine
-		err := json.Unmarshal(buf, &line)
-		if line.Value == "" && line.Aux.Id != "" {
-			break
-		}
-
-		if line.Status != "" { // TODO what should we do here?
-			continue
-		}
-
-		if err != nil || line.Value == "" {
-			errLine := ErrorLine{Error: line.Error, ErrorDetail: line.ErrorDetail}
-			return errors.New(fmt.Sprintf("%#v", errLine))
-		}
-
-		fmt.Print(line.Value)
-	}
-
-	return scanner.Err()
 }
