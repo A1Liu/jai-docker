@@ -1,4 +1,4 @@
-module a1liu.com/jai
+module a1liu.com/jai-docker
 
 go 1.16
 

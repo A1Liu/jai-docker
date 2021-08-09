@@ -3,4 +3,4 @@ USER root
 WORKDIR /cwd
 
 RUN apt-get update
-RUN apt-get install -y zlib1g build-essential
+RUN apt-get install -y zlib1g build-essential clang-9

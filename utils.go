@@ -1,4 +1,4 @@
-package main
+package jai_docker
 
 // This code is a wrapper around Docker functionality, in the hopes that it won't
 // be that much of a pain to set up on windows. We will have to see though. It's
@@ -30,43 +30,33 @@ const (
 )
 
 var (
-	projectDir = func() string {
+	ProjectDir = func() string {
 		_, filename, _, _ := runtime.Caller(0)
 		abs, err := filepath.Abs(filename)
-		checkErr(err)
+		CheckErr(err)
 
 		return path.Dir(abs)
 	}()
 )
 
-func main() {
-	ctx := context.Background()
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	checkErr(err)
-
-	commandStatus := runCmd(cli, ctx, os.Args[1:])
-	if commandStatus != 0 {
-		os.Exit(commandStatus)
-	}
-
-	os.Exit(0)
-}
-
-func runCmd(cli *client.Client, ctx context.Context, args []string) int {
+func RunCmd(ctx context.Context, binary string, args []string) int {
 	begin := time.Now()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	CheckErr(err)
+
 	buildImage(cli, ctx, "ubuntu.Dockerfile", ubuntuImage, false)
 	buildImage(cli, ctx, "Dockerfile", compilerImage, false)
 
 	cwd, err := os.Getwd()
-	checkErr(err)
+	CheckErr(err)
 
 	// Build container
-	cmdBinary := []string{"/root/jai-docker/jai/bin/jai-linux"}
+	cmdBinary := []string{binary}
 	cmdBinary = append(cmdBinary, args...)
 	containerConfig := container.Config{
 		Image:      compilerImage,
 		Cmd:        cmdBinary,
-		WorkingDir: "/root/jai-docker",
+		WorkingDir: "/cwd",
 	}
 	hostConfig := container.HostConfig{
 		Mounts: []mount.Mount{
@@ -77,7 +67,7 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 			},
 			{
 				Type:   mount.TypeBind,
-				Source: projectDir,
+				Source: ProjectDir,
 				Target: "/root/jai-docker",
 			},
 		},
@@ -97,10 +87,10 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 			fmt.Printf("%#v\n", resp.Warnings)
 		}
 	}
-	checkErr(err)
+	CheckErr(err)
 
 	err = cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{})
-	checkErr(err)
+	CheckErr(err)
 
 	compileBegin := time.Now()
 	fmt.Printf("docker stuff took %v seconds\n\n", compileBegin.Sub(begin).Seconds())
@@ -109,14 +99,14 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 	var commandStatus int64
 	select {
 	case err := <-errCh:
-		checkErr(err)
+		CheckErr(err)
 	case resp := <-statusCh:
 		commandStatus = resp.StatusCode
 	}
 
 	logOptions := types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true}
 	out, err := cli.ContainerLogs(ctx, resp.ID, logOptions)
-	checkErr(err)
+	CheckErr(err)
 
 	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
 
@@ -125,29 +115,29 @@ func runCmd(cli *client.Client, ctx context.Context, args []string) int {
 		Force:         true,
 	}
 	err = cli.ContainerRemove(ctx, resp.ID, removeOptions)
-	checkErr(err)
+	CheckErr(err)
 
 	return int(commandStatus)
 }
 
 func needBuild(dockerfilePath, imageName string) bool {
 	escapedName := strings.Replace(imageName, string(os.PathSeparator), ".", -1)
-	placeholder := ".image-" + escapedName
-	dockerfilePath = filepath.Join(projectDir, dockerfilePath)
+	placeholder := filepath.Join(ProjectDir, ".image-"+escapedName)
+	dockerfilePath = filepath.Join(ProjectDir, dockerfilePath)
 
 	dockerfileStat, err := os.Stat(dockerfilePath)
-	checkErr(err)
+	CheckErr(err)
 	placeholderStat, err := os.Stat(placeholder)
 
 	if os.IsNotExist(err) {
 		file, err := os.Create(placeholder)
-		checkErr(err)
+		CheckErr(err)
 		file.Close()
 		return true
 	} else {
 		currentTime := time.Now().Local()
 		err = os.Chtimes(placeholder, currentTime, currentTime)
-		checkErr(err)
+		CheckErr(err)
 
 		return dockerfileStat.ModTime().After(placeholderStat.ModTime())
 	}
@@ -158,12 +148,12 @@ func buildImage(cli *client.Client, ctx context.Context, dockerfilePath, imageNa
 		return
 	}
 
-	cmd := exec.Command("docker", "build", "--platform=linux/amd64", "-f", dockerfilePath, "--tag", imageName, ".")
+	cmd := exec.Command("docker", "build", "--platform=linux/amd64", "-f", filepath.Join(ProjectDir, dockerfilePath), "--tag", imageName, ".")
 
 	stdout, err := cmd.StdoutPipe()
-	checkErr(err)
+	CheckErr(err)
 	stderr, err := cmd.StderrPipe()
-	checkErr(err)
+	CheckErr(err)
 
 	finished := make(chan bool)
 	ioCopy := func(w io.Writer, r io.Reader) {
@@ -177,10 +167,10 @@ func buildImage(cli *client.Client, ctx context.Context, dockerfilePath, imageNa
 	<-finished
 	<-finished
 
-	checkErr(err)
+	CheckErr(err)
 }
 
-func checkErr(err error) {
+func CheckErr(err error) {
 	if err != nil {
 		panic(err.Error())
 	}
