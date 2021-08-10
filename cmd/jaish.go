@@ -9,14 +9,8 @@ import (
 )
 
 func main() {
-
-	args := make([]string, len(os.Args))
-	copy(args[1:], os.Args[1:])
-	args[0] = "-c"
-
-	argstring := strings.Join(args, " ")
-
-	commandStatus := jai.RunCmd(context.Background(), "/bin/bash", []string{argstring})
+	argstring := strings.Join(os.Args[1:], " ")
+	commandStatus := jai.RunCmd(context.Background(), "/bin/bash", []string{"-c", argstring})
 	if commandStatus != 0 {
 		os.Exit(commandStatus)
 	}
