@@ -5,7 +5,11 @@
 /build
 
 # Don't wanna publicise the compiler before release!
+/jai
+/jai-beta*
 jai
+jai-linux
+jai.exe
 
 # The compiler outputs some stuff to this folder
 /.build
